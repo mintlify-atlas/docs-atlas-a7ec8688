@@ -1,0 +1,104 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Shield",
+  "projectDescription": "Runtime prompt security SDK for detecting injections and sanitizing LLM output",
+  "theme": "aspen",
+  "primaryColor": "#0F766E",
+  "lightColor": "#5EEAD4",
+  "darkColor": "#134E4A",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Functions",
+            "pages": [
+              "core/harden",
+              "core/detect",
+              "core/sanitize"
+            ]
+          },
+          {
+            "group": "Provider Integrations",
+            "pages": [
+              "providers/openai",
+              "providers/anthropic",
+              "providers/groq",
+              "providers/vercel-ai-sdk"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/error-handling",
+              "advanced/threat-model",
+              "advanced/performance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/harden",
+              "api/detect",
+              "api/sanitize",
+              "api/sanitize-object"
+            ]
+          },
+          {
+            "group": "Providers API",
+            "pages": [
+              "api/shield-openai",
+              "api/shield-anthropic",
+              "api/shield-groq",
+              "api/shield-ai-sdk"
+            ]
+          },
+          {
+            "group": "Types & Errors",
+            "pages": [
+              "api/types",
+              "api/errors"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Harden system prompts with security rules",
+    "Detect prompt injection attacks in user input",
+    "Sanitize LLM output to prevent prompt leakage",
+    "Provider wrappers for OpenAI, Anthropic, Groq, and Vercel AI SDK",
+    "Sub-5ms performance for real-time protection",
+    "Typed error handling with custom error classes"
+  ],
+  "publicApiSurface": [
+    "harden(prompt, options?)",
+    "detect(input, options?)",
+    "detectAsync(input, options?)",
+    "sanitize(output, systemPrompt, options?)",
+    "sanitizeObject(obj, systemPrompt, options?)",
+    "shieldOpenAI(client, options)",
+    "shieldAnthropic(client, options)",
+    "shieldGroq(client, options)",
+    "shieldMiddleware(options)",
+    "shieldLanguageModelMiddleware(options)",
+    "InjectionDetectedError",
+    "LeakDetectedError",
+    "ShieldError"
+  ]
+}
