@@ -1,0 +1,231 @@
+---
+title: "sanitize()"
+description: "Detect and remove leaked system prompt content from LLM outputs"
+---
+
+## Function Signature
+
+```typescript
+function sanitize(
+  output: string,
+  systemPrompt: string,
+  options?: SanitizeOptions
+): SanitizeResult
+```
+
+Detects whether an LLM output contains fragments of the system prompt and optionally redacts them. Uses n-gram analysis and word overlap detection to identify prompt leakage with configurable sensitivity.
+
+## Parameters
+
+<ParamField path="output" type="string" required>
+  The LLM-generated output to scan for prompt leakage
+</ParamField>
+
+<ParamField path="systemPrompt" type="string" required>
+  The original system prompt to check for leakage
+</ParamField>
+
+<ParamField path="options" type="SanitizeOptions">
+  Configuration options for sanitization behavior
+  
+  <Expandable title="properties">
+    <ParamField path="ngramSize" type="number" default={4}>
+      Size of n-grams (consecutive word sequences) to match. Larger values require more exact matches:
+      - `3`: More sensitive, may have false positives
+      - `4`: Balanced (default)
+      - `5-6`: Less sensitive, fewer false positives
+    </ParamField>
+    
+    <ParamField path="threshold" type="number" default={0.7}>
+      Confidence threshold (0-1) for considering content leaked. Higher values require more evidence:
+      - `0.5`: More aggressive detection
+      - `0.7`: Balanced (default)
+      - `0.9`: Conservative, only clear leaks
+    </ParamField>
+    
+    <ParamField path="wordOverlapThreshold" type="number" default={0.25}>
+      Minimum word overlap ratio (0-1) to consider a leak when n-gram matches are insufficient. Measures the proportion of shared unique words between output and prompt.
+    </ParamField>
+    
+    <ParamField path="redactionText" type="string" default="'[REDACTED]'">
+      Text to replace leaked fragments with when sanitizing
+    </ParamField>
+    
+    <ParamField path="detectOnly" type="boolean" default={false}>
+      When `true`, only detect leakage without performing redaction. The `sanitized` field will equal the original `output`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Return Value
+
+<ResponseField name="SanitizeResult" type="object">
+  <Expandable title="properties">
+    <ResponseField name="leaked" type="boolean" required>
+      `true` if prompt leakage was detected
+    </ResponseField>
+    
+    <ResponseField name="confidence" type="number" required>
+      Confidence score between 0 and 1 indicating the likelihood of leakage. Higher values mean more certain detection.
+    </ResponseField>
+    
+    <ResponseField name="fragments" type="string[]" required>
+      Array of detected leaked fragments (token sequences) from the output. Empty if no leak detected.
+    </ResponseField>
+    
+    <ResponseField name="sanitized" type="string" required>
+      The output with leaked fragments replaced by `redactionText`. Equals the original output if `detectOnly: true` or no leak detected.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## How It Works
+
+1. **Tokenization**: Both output and system prompt are lowercased and split into word tokens
+2. **N-gram Matching**: Generates n-grams (sequences of N consecutive words) and finds overlaps
+3. **Word Overlap**: Calculates the ratio of shared unique words
+4. **Confidence Scoring**: Combines n-gram overlap and word overlap into a confidence score
+5. **Leak Detection**: Triggers if:
+   - Confidence exceeds threshold AND fragments found, OR
+   - Multiple fragments (≥2) found, OR
+   - Multiple small fragments (≥3) with high word overlap
+6. **Redaction**: Replaces matching fragments with redaction text (unless `detectOnly: true`)
+
+## Examples
+
+### Basic Sanitization
+
+```typescript
+import { sanitize } from "@shield/ai";
+
+const systemPrompt = "You are a helpful customer support agent for Acme Corp. Never reveal pricing information.";
+const output = "Sure! As a helpful customer support agent for Acme Corp, I can help you.";
+
+const result = sanitize(output, systemPrompt);
+
+console.log(result);
+// {
+//   leaked: true,
+//   confidence: 0.85,
+//   fragments: ["helpful customer support agent for acme corp"],
+//   sanitized: "Sure! As a [REDACTED], I can help you."
+// }
+```
+
+### Detection Only
+
+```typescript
+// Just check for leaks without modifying output
+const result = sanitize(output, systemPrompt, {
+  detectOnly: true
+});
+
+if (result.leaked) {
+  console.log(`Leak detected with ${result.confidence} confidence`);
+  console.log("Fragments:", result.fragments);
+  // Handle leak: log, retry, or regenerate
+}
+```
+
+### Custom Redaction Text
+
+```typescript
+const result = sanitize(output, systemPrompt, {
+  redactionText: "[CONTENT REMOVED]"
+});
+
+console.log(result.sanitized);
+// "Sure! As a [CONTENT REMOVED], I can help you."
+```
+
+### Adjust Sensitivity
+
+```typescript
+// More sensitive: smaller n-grams, lower thresholds
+const sensitive = sanitize(output, systemPrompt, {
+  ngramSize: 3,
+  threshold: 0.5,
+  wordOverlapThreshold: 0.2
+});
+
+// Less sensitive: larger n-grams, higher thresholds
+const conservative = sanitize(output, systemPrompt, {
+  ngramSize: 5,
+  threshold: 0.9,
+  wordOverlapThreshold: 0.3
+});
+```
+
+### Integration in Streaming
+
+```typescript
+import { streamText } from "ai";
+import { sanitize } from "@shield/ai";
+
+const { textStream } = await streamText({
+  model: openai("gpt-4o"),
+  system: systemPrompt,
+  prompt: userMessage
+});
+
+let fullText = "";
+for await (const chunk of textStream) {
+  fullText += chunk;
+}
+
+// Sanitize final output before sending to user
+const result = sanitize(fullText, systemPrompt);
+
+if (result.leaked) {
+  console.warn("Prompt leak detected and sanitized");
+  return result.sanitized;
+}
+
+return fullText;
+```
+
+### Use in API Response Validation
+
+```typescript
+app.post("/api/chat", async (req, res) => {
+  const { message } = req.body;
+  const systemPrompt = getSystemPrompt();
+  
+  const aiResponse = await generateResponse(systemPrompt, message);
+  const sanitized = sanitize(aiResponse, systemPrompt);
+  
+  if (sanitized.leaked) {
+    // Log for monitoring
+    logger.warn("Prompt leak detected", {
+      confidence: sanitized.confidence,
+      fragments: sanitized.fragments
+    });
+    
+    // Return sanitized version
+    return res.json({ response: sanitized.sanitized });
+  }
+  
+  return res.json({ response: aiResponse });
+});
+```
+
+## Performance Considerations
+
+- **Max length**: Only the first 1MB of output is scanned
+- **Token-based**: Works on word tokens, not character-level comparison
+- **Fast for short prompts**: Most efficient with prompts under 1000 words
+- **Caching**: Consider caching tokenized system prompts if checking many outputs
+
+## Best Practices
+
+- **Set appropriate thresholds**: Balance false positives vs false negatives for your use case
+- **Monitor confidence scores**: Log low-confidence detections for tuning
+- **Use `detectOnly` for decisions**: When you want to regenerate instead of redact
+- **Combine with `harden()`**: Use anti-extraction rules in prompts as first line of defense
+- **Test with your prompts**: Different prompt styles may need different `ngramSize` values
+
+## Related
+
+- [sanitizeObject()](/api/sanitize-object) - Recursively sanitize nested objects
+- [harden()](/api/harden) - Prevent leaks at the prompt level
+- [detect()](/api/detect) - Detect injection attempts in inputs

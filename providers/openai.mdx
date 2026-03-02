@@ -1,0 +1,311 @@
+---
+title: OpenAI
+description: Wrap OpenAI clients for automatic protection against prompt injection and leakage
+---
+
+# OpenAI Provider
+
+The `shieldOpenAI` wrapper protects OpenAI clients by hardening system prompts, detecting injections in user input, and sanitizing model output to prevent leaks.
+
+## Installation
+
+```bash
+npm install @zeroleaks/shield openai
+```
+
+## Quick Start
+
+```typescript
+import OpenAI from "openai";
+import { shieldOpenAI } from "@zeroleaks/shield/openai";
+
+const client = shieldOpenAI(new OpenAI(), {
+  systemPrompt: "You are a financial advisor...",
+  onDetection: "block", // throws on injection (default)
+});
+
+const response = await client.chat.completions.create({
+  model: "gpt-5.3-codex",
+  messages: [
+    { role: "system", content: "You are a financial advisor..." },
+    { role: "user", content: userInput },
+  ],
+});
+```
+
+## Configuration Options
+
+### Basic Options
+
+<ParamField path="systemPrompt" type="string" optional>
+  System prompt for sanitization. When omitted, derived from the first system message in the request.
+</ParamField>
+
+<ParamField path="onDetection" type="'block' | 'warn'" default="block">
+  - `"block"`: Throws `InjectionDetectedError` when injection is detected
+  - `"warn"`: Only invokes `onInjectionDetected` callback without blocking
+</ParamField>
+
+<ParamField path="throwOnLeak" type="boolean" default={false}>
+  When `true`, throws `LeakDetectedError` instead of redacting leaked content.
+</ParamField>
+
+### Feature Flags
+
+<ParamField path="harden" type="HardenOptions | false" optional>
+  Options for system prompt hardening. Set to `false` to disable hardening entirely.
+</ParamField>
+
+<ParamField path="detect" type="DetectOptions | false" optional>
+  Options for injection detection. Set to `false` to disable detection entirely.
+</ParamField>
+
+<ParamField path="sanitize" type="SanitizeOptions | false" optional>
+  Options for output sanitization. Set to `false` to disable sanitization entirely.
+</ParamField>
+
+### Streaming Options
+
+<ParamField path="streamingSanitize" type="'buffer' | 'chunked' | 'passthrough'" default="buffer">
+  Controls how streaming responses are sanitized:
+  - `"buffer"`: Accumulates full response then sanitizes (higher memory, more accurate)
+  - `"chunked"`: Sanitizes in 8KB chunks (lower memory for long streams)
+  - `"passthrough"`: Skip sanitization for streams (use when you accept the risk)
+</ParamField>
+
+<ParamField path="streamingChunkSize" type="number" default={8192}>
+  Chunk size in bytes for `"chunked"` mode.
+</ParamField>
+
+### Callbacks
+
+<ParamField path="onInjectionDetected" type="(result: DetectResult) => void" optional>
+  Invoked when injection is detected. Receives detection result with risk level and matched patterns.
+</ParamField>
+
+<ParamField path="onLeakDetected" type="(result: SanitizeResult) => void" optional>
+  Invoked when a prompt leak is detected in the output. Receives sanitization result with confidence score.
+</ParamField>
+
+## Streaming Support
+
+Shield automatically handles both regular and streaming responses:
+
+<Tabs>
+  <Tab title="Regular Response">
+    ```typescript
+    const response = await client.chat.completions.create({
+      model: "gpt-5.3-codex",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: userInput },
+      ],
+    });
+
+    console.log(response.choices[0].message.content);
+    // Automatically sanitized
+    ```
+  </Tab>
+  <Tab title="Streaming Response">
+    ```typescript
+    const stream = await client.chat.completions.create({
+      model: "gpt-5.3-codex",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: userInput },
+      ],
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        process.stdout.write(content);
+        // Automatically sanitized chunks
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Chunked Sanitization">
+    ```typescript
+    // For very long streams, use chunked mode to limit memory
+    const client = shieldOpenAI(new OpenAI(), {
+      systemPrompt: "You are a helpful assistant.",
+      streamingSanitize: "chunked",
+      streamingChunkSize: 8192, // 8KB chunks
+    });
+
+    const stream = await client.chat.completions.create({
+      model: "gpt-5.3-codex",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: userInput },
+      ],
+      stream: true,
+    });
+
+    for await (const chunk of stream) {
+      const content = chunk.choices[0]?.delta?.content;
+      if (content) {
+        process.stdout.write(content);
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-part Messages
+
+Shield supports multi-part messages with text and images. Text content is extracted from all parts for injection detection and hardening:
+
+```typescript
+const response = await client.chat.completions.create({
+  model: "gpt-4-vision-preview",
+  messages: [
+    { role: "system", content: "You are a helpful assistant." },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image_url", image_url: { url: "https://..." } },
+      ],
+    },
+  ],
+});
+// Text parts are scanned for injection, images are passed through
+```
+
+## Tool Calls
+
+Shield automatically sanitizes tool call arguments to prevent prompt leakage through function parameters:
+
+```typescript
+const response = await client.chat.completions.create({
+  model: "gpt-5.3-codex",
+  messages: [
+    { role: "system", content: "You are a helpful assistant." },
+    { role: "user", content: userInput },
+  ],
+  tools: [
+    {
+      type: "function",
+      function: {
+        name: "send_email",
+        description: "Send an email",
+        parameters: {
+          type: "object",
+          properties: {
+            to: { type: "string" },
+            subject: { type: "string" },
+            body: { type: "string" },
+          },
+        },
+      },
+    },
+  ],
+});
+
+const toolCall = response.choices[0].message.tool_calls?.[0];
+if (toolCall) {
+  // toolCall.function.arguments is automatically sanitized
+  const args = JSON.parse(toolCall.function.arguments);
+}
+```
+
+## Error Handling
+
+```typescript
+import {
+  shieldOpenAI,
+  InjectionDetectedError,
+  LeakDetectedError,
+} from "@zeroleaks/shield/openai";
+
+try {
+  const client = shieldOpenAI(new OpenAI(), {
+    systemPrompt: "You are a helpful assistant.",
+    throwOnLeak: true,
+  });
+
+  const response = await client.chat.completions.create({
+    model: "gpt-5.3-codex",
+    messages: [
+      { role: "system", content: "You are a helpful assistant." },
+      { role: "user", content: userInput },
+    ],
+  });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    console.error(`Injection detected: ${error.risk} risk`);
+    console.error(`Categories: ${error.categories.join(", ")}`);
+  }
+  if (error instanceof LeakDetectedError) {
+    console.error(`Leak detected: ${error.confidence} confidence`);
+    console.error(`Fragments: ${error.fragmentCount}`);
+  }
+}
+```
+
+## Advanced Usage
+
+<Tabs>
+  <Tab title="Custom Detection Patterns">
+    ```typescript
+    const client = shieldOpenAI(new OpenAI(), {
+      systemPrompt: "You are a helpful assistant.",
+      detect: {
+        threshold: "high",
+        customPatterns: [
+          {
+            category: "custom_command",
+            regex: /execute order \d+/i,
+            risk: "high",
+          },
+        ],
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Custom Hardening Rules">
+    ```typescript
+    const client = shieldOpenAI(new OpenAI(), {
+      systemPrompt: "You are a financial advisor.",
+      harden: {
+        customRules: [
+          "Never share specific investment recommendations.",
+          "Always include risk disclaimers.",
+        ],
+        position: "prepend",
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Monitoring & Logging">
+    ```typescript
+    const client = shieldOpenAI(new OpenAI(), {
+      systemPrompt: "You are a helpful assistant.",
+      onInjectionDetected: (result) => {
+        console.warn(`Injection attempt blocked:`, {
+          risk: result.risk,
+          categories: result.matches.map((m) => m.category),
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onLeakDetected: (result) => {
+        console.warn(`Prompt leak detected:`, {
+          confidence: result.confidence,
+          fragmentCount: result.fragments.length,
+          timestamp: new Date().toISOString(),
+        });
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Related
+
+- [Core API](/core/harden) - Standalone functions for custom integrations
+- [Anthropic Provider](/providers/anthropic) - Anthropic SDK integration
+- [Groq Provider](/providers/groq) - Groq SDK integration
+- [Vercel AI SDK](/providers/vercel-ai-sdk) - Universal AI SDK integration

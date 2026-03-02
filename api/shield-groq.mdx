@@ -1,0 +1,165 @@
+---
+title: shieldGroq()
+description: Groq provider wrapper with automatic prompt hardening, injection detection, and leak sanitization
+---
+
+## Function Signature
+
+```typescript
+function shieldGroq<T extends {
+  chat: { completions: { create: (...args: unknown[]) => unknown } };
+}>(client: T, options?: ShieldGroqOptions): T
+```
+
+Wraps a Groq client instance with Shield protection. Returns a wrapped client with the same API surface that automatically hardens system prompts, detects injections in user input, and sanitizes model output.
+
+## Parameters
+
+<ParamField path="client" type="Groq" required>
+  An instance of the Groq SDK client (from `groq-sdk` package >= 0.3.0)
+</ParamField>
+
+<ParamField path="options" type="ShieldGroqOptions">
+  Configuration options for Shield protection
+</ParamField>
+
+## ShieldGroqOptions
+
+<ParamField path="systemPrompt" type="string">
+  System prompt used for sanitization. When omitted, Shield automatically derives it from the first system message in your request.
+</ParamField>
+
+<ParamField path="harden" type="HardenOptions | false" default="{}">
+  Options for prompt hardening. Set to `false` to disable hardening. See [harden()](/api/harden) for available options.
+</ParamField>
+
+<ParamField path="detect" type="DetectOptions | false" default="{}">
+  Options for injection detection. Set to `false` to disable detection. See [detect()](/api/detect) for available options.
+</ParamField>
+
+<ParamField path="sanitize" type="SanitizeOptions | false" default="{}">
+  Options for output sanitization. Set to `false` to disable sanitization. See [sanitize()](/api/sanitize) for available options.
+</ParamField>
+
+<ParamField path="streamingSanitize" type="'buffer' | 'chunked' | 'passthrough'" default="'buffer'">
+  Streaming sanitization strategy:
+  - `"buffer"`: Accumulate the full stream, then sanitize (higher memory, more accurate)
+  - `"chunked"`: Process in 8KB chunks (lower memory for long streams)
+  - `"passthrough"`: Skip sanitization entirely (use when you accept the risk)
+</ParamField>
+
+<ParamField path="streamingChunkSize" type="number" default="8192">
+  Chunk size in bytes for `"chunked"` mode. Only applies when `streamingSanitize` is set to `"chunked"`.
+</ParamField>
+
+<ParamField path="onDetection" type="'block' | 'warn'" default="'block'">
+  Behavior when injection is detected:
+  - `"block"`: Throw `InjectionDetectedError` (request fails)
+  - `"warn"`: Only invoke `onInjectionDetected` callback (request continues)
+</ParamField>
+
+<ParamField path="throwOnLeak" type="boolean" default="false">
+  When `true`, throw `LeakDetectedError` instead of redacting leaked content. Use for strict security policies where any leak should abort the request.
+</ParamField>
+
+<ParamField path="onInjectionDetected" type="(result: DetectResult) => void">
+  Callback invoked when an injection is detected. Receives the full `DetectResult` with risk level and matched patterns.
+</ParamField>
+
+<ParamField path="onLeakDetected" type="(result: SanitizeResult) => void">
+  Callback invoked when a prompt leak is detected in the output. Receives the full `SanitizeResult` with confidence score and leaked fragments.
+</ParamField>
+
+## Return Type
+
+Returns the same client type `T` with Shield protection applied. All methods work identically to the original client.
+
+## Examples
+
+### Basic Usage
+
+```typescript
+import Groq from "groq-sdk";
+import { shieldGroq } from "@zeroleaks/shield/groq";
+
+const client = shieldGroq(new Groq(), {
+  systemPrompt: "You are a support agent...",
+});
+
+const response = await client.chat.completions.create({
+  model: "openai/gpt-oss-120b",
+  messages: [
+    { role: "system", content: "You are a support agent..." },
+    { role: "user", content: userInput },
+  ],
+});
+```
+
+### Streaming with Chunked Sanitization
+
+```typescript
+const client = shieldGroq(new Groq(), {
+  systemPrompt: "You are a helpful assistant.",
+  streamingSanitize: "chunked", // Process in 8KB chunks
+  streamingChunkSize: 4096, // Use 4KB chunks
+});
+
+const stream = await client.chat.completions.create({
+  model: "openai/gpt-oss-120b",
+  messages: [{ role: "user", content: userInput }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content || "");
+}
+```
+
+### Custom Detection Callbacks
+
+```typescript
+const client = shieldGroq(new Groq(), {
+  systemPrompt: "You are a helpful assistant.",
+  onDetection: "warn", // Don't throw, just log
+  onInjectionDetected: (result) => {
+    console.warn(`Injection detected: ${result.risk} risk`);
+    console.warn(`Matched patterns: ${result.matches.map(m => m.category).join(", ")}`);
+  },
+  onLeakDetected: (result) => {
+    console.warn(`Leak detected with ${result.confidence} confidence`);
+    console.warn(`Fragments: ${result.fragments.length}`);
+  },
+});
+```
+
+### Strict Mode (Throw on Any Leak)
+
+```typescript
+import { InjectionDetectedError, LeakDetectedError } from "@zeroleaks/shield";
+
+const client = shieldGroq(new Groq(), {
+  systemPrompt: "You are a support agent.",
+  throwOnLeak: true, // Abort request on any leak
+});
+
+try {
+  const response = await client.chat.completions.create({
+    model: "openai/gpt-oss-120b",
+    messages: [{ role: "user", content: userInput }],
+  });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    console.error(`Injection: ${error.risk} risk, categories: ${error.categories}`);
+  }
+  if (error instanceof LeakDetectedError) {
+    console.error(`Leak: ${error.confidence} confidence, ${error.fragmentCount} fragments`);
+  }
+}
+```
+
+## Notes
+
+- **OpenAI-compatible API**: Groq uses the same API format as OpenAI, so the usage patterns are identical.
+- **Multi-part messages**: Groq supports `content` as `string | ContentPart[]` (e.g., text + images). Shield extracts text from all parts for injection detection and hardening.
+- **Tool calls**: Shield automatically sanitizes function arguments in tool calls to prevent leaks in structured outputs.
+- **Auto-derived system prompt**: When `systemPrompt` is not provided, Shield extracts it from the first system message in your request.

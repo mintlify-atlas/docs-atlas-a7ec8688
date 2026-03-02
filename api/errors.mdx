@@ -1,0 +1,178 @@
+---
+title: Errors
+description: Error classes exported by Shield
+---
+
+Shield exports typed error classes for structured error handling. All Shield errors extend the base `ShieldError` class.
+
+## Error Classes
+
+### ShieldError
+
+Base error class for all Shield errors. Extends the standard JavaScript `Error` class.
+
+```typescript
+class ShieldError extends Error {
+  readonly code: string;
+  readonly name: string;
+}
+```
+
+<ResponseField name="code" type="string">
+  Machine-readable error code for programmatic handling
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Error name (always `"ShieldError"` for base class)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable error message (inherited from `Error`)
+</ResponseField>
+
+### InjectionDetectedError
+
+Thrown when a prompt injection is detected in user input and `onDetection: "block"` is configured (default behavior).
+
+Extends `ShieldError`.
+
+```typescript
+class InjectionDetectedError extends ShieldError {
+  readonly code: "INJECTION_DETECTED";
+  readonly name: "InjectionDetectedError";
+  readonly risk: string;
+  readonly categories: string[];
+}
+```
+
+<ResponseField name="code" type="string">
+  Always `"INJECTION_DETECTED"`
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Always `"InjectionDetectedError"`
+</ResponseField>
+
+<ResponseField name="risk" type="'low' | 'medium' | 'high' | 'critical'">
+  Highest risk level among all detected injection patterns
+</ResponseField>
+
+<ResponseField name="categories" type="string[]">
+  Array of injection categories that were detected (e.g., `["instruction_override", "role_hijack"]`)
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Formatted message like: `"Prompt injection detected (high risk): instruction_override, role_hijack"`
+</ResponseField>
+
+### LeakDetectedError
+
+Thrown when a system prompt leak is detected in model output and `throwOnLeak: true` is configured.
+
+Extends `ShieldError`.
+
+```typescript
+class LeakDetectedError extends ShieldError {
+  readonly code: "LEAK_DETECTED";
+  readonly name: "LeakDetectedError";
+  readonly confidence: number;
+  readonly fragmentCount: number;
+}
+```
+
+<ResponseField name="code" type="string">
+  Always `"LEAK_DETECTED"`
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Always `"LeakDetectedError"`
+</ResponseField>
+
+<ResponseField name="confidence" type="number">
+  Confidence score (0-1) for the leak detection. Higher values indicate stronger evidence of leakage.
+</ResponseField>
+
+<ResponseField name="fragmentCount" type="number">
+  Number of leaked fragments detected from the system prompt
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Formatted message like: `"System prompt leak detected (confidence: 87%, 3 fragments)"`
+</ResponseField>
+
+## Error Handling
+
+Shield errors can be caught and handled using standard JavaScript error handling:
+
+```typescript
+import { 
+  ShieldError, 
+  InjectionDetectedError, 
+  LeakDetectedError 
+} from "@zeroleaks/shield";
+import { shieldOpenAI } from "@zeroleaks/shield/openai";
+import OpenAI from "openai";
+
+try {
+  const client = shieldOpenAI(new OpenAI(), { 
+    systemPrompt: "You are a financial advisor...",
+    throwOnLeak: true 
+  });
+  
+  const response = await client.chat.completions.create({
+    model: "gpt-5.3-codex",
+    messages: [
+      { role: "system", content: "You are a financial advisor..." },
+      { role: "user", content: userInput },
+    ],
+  });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    console.error(`Injection detected with ${error.risk} risk`);
+    console.error(`Categories: ${error.categories.join(", ")}`);
+    // Handle injection: log, alert, block user, etc.
+  } else if (error instanceof LeakDetectedError) {
+    console.error(`Leak detected with ${Math.round(error.confidence * 100)}% confidence`);
+    console.error(`Fragment count: ${error.fragmentCount}`);
+    // Handle leak: log, alert, use redacted output, etc.
+  } else if (error instanceof ShieldError) {
+    console.error(`Shield error: ${error.code}`);
+  } else {
+    // Handle other errors
+    throw error;
+  }
+}
+```
+
+## Error Inheritance Hierarchy
+
+```
+Error (JavaScript built-in)
+  └── ShieldError
+        ├── InjectionDetectedError
+        └── LeakDetectedError
+```
+
+All Shield errors can be caught with a single `catch (error instanceof ShieldError)` block, or you can handle each error type individually for more granular control.
+
+## When Errors Are Thrown
+
+### InjectionDetectedError
+
+Thrown by provider wrappers when:
+- Injection is detected in user input
+- `onDetection` is set to `"block"` (default)
+
+Not thrown when:
+- `onDetection` is set to `"warn"` (only callback is invoked)
+- `detect` is set to `false` (detection is disabled)
+
+### LeakDetectedError
+
+Thrown by provider wrappers when:
+- A system prompt leak is detected in model output
+- `throwOnLeak` is set to `true`
+
+Not thrown when:
+- `throwOnLeak` is `false` (default) — output is silently redacted instead
+- `sanitize` is set to `false` (sanitization is disabled)

@@ -1,0 +1,245 @@
+---
+title: Error Handling
+description: Handle Shield errors with typed exceptions for injection detection and leak prevention
+---
+
+Shield exports typed errors for structured error handling. This allows you to catch and respond to security events programmatically.
+
+## Typed Error Classes
+
+Shield provides three error classes for different security scenarios:
+
+### ShieldError
+
+Base error class for all Shield errors.
+
+```typescript
+export class ShieldError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "ShieldError";
+    this.code = code;
+  }
+}
+```
+
+### InjectionDetectedError
+
+Thrown when prompt injection is detected in user input (when `onDetection: "block"`).
+
+```typescript
+export class InjectionDetectedError extends ShieldError {
+  readonly risk: string;
+  readonly categories: string[];
+
+  constructor(risk: string, categories: string[]) {
+    super(
+      `Prompt injection detected (${risk} risk): ${categories.join(", ")}`,
+      "INJECTION_DETECTED"
+    );
+    this.name = "InjectionDetectedError";
+    this.risk = risk;
+    this.categories = categories;
+  }
+}
+```
+
+**Properties:**
+- `risk`: Risk level (`"low"`, `"medium"`, `"high"`, or `"critical"`)
+- `categories`: Array of attack categories detected (e.g. `["role_hijacking", "instruction_override"]`)
+- `code`: Always `"INJECTION_DETECTED"`
+
+### LeakDetectedError
+
+Thrown when system prompt leakage is detected in model output (when `throwOnLeak: true`).
+
+```typescript
+export class LeakDetectedError extends ShieldError {
+  readonly confidence: number;
+  readonly fragmentCount: number;
+
+  constructor(confidence: number, fragmentCount: number) {
+    super(
+      `System prompt leak detected (confidence: ${Math.round(confidence * 100)}%, ${fragmentCount} fragment${fragmentCount !== 1 ? "s" : ""})`,
+      "LEAK_DETECTED"
+    );
+    this.name = "LeakDetectedError";
+    this.confidence = confidence;
+    this.fragmentCount = fragmentCount;
+  }
+}
+```
+
+**Properties:**
+- `confidence`: Leak confidence score (0-1)
+- `fragmentCount`: Number of system prompt fragments detected in output
+- `code`: Always `"LEAK_DETECTED"`
+
+## Error Handling Patterns
+
+### Catching Injection and Leak Errors
+
+```typescript
+import { 
+  ShieldError, 
+  InjectionDetectedError, 
+  LeakDetectedError 
+} from "@zeroleaks/shield";
+
+try {
+  const client = shieldOpenAI(openai, { 
+    systemPrompt: "...", 
+    throwOnLeak: true 
+  });
+  await client.chat.completions.create({ ... });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    console.log(error.risk, error.categories);
+  }
+  if (error instanceof LeakDetectedError) {
+    console.log(error.confidence, error.fragmentCount);
+  }
+}
+```
+
+### Logging Security Events
+
+```typescript
+import { InjectionDetectedError, LeakDetectedError } from "@zeroleaks/shield";
+
+try {
+  const response = await shieldedClient.chat.completions.create({
+    model: "gpt-5.3-codex",
+    messages: [{ role: "user", content: userInput }],
+  });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    // Log security event to monitoring system
+    logger.warn("Prompt injection detected", {
+      risk: error.risk,
+      categories: error.categories,
+      userId: currentUser.id,
+    });
+    return { error: "Invalid input detected" };
+  }
+}
+```
+
+### Custom Error Handling by Risk Level
+
+```typescript
+try {
+  const response = await shieldedClient.chat.completions.create(params);
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    switch (error.risk) {
+      case "critical":
+      case "high":
+        // Block request and flag account
+        await flagUserAccount(userId);
+        throw new Error("Request blocked");
+      
+      case "medium":
+        // Log and notify security team
+        await notifySecurityTeam(error);
+        throw error;
+      
+      case "low":
+        // Log only
+        logger.info("Low-risk pattern detected", { categories: error.categories });
+        throw error;
+    }
+  }
+}
+```
+
+## Detection Modes
+
+Shield supports two detection modes via the `onDetection` option:
+
+### Block Mode (default)
+
+Throws `InjectionDetectedError` when injection is detected:
+
+```typescript
+const client = shieldOpenAI(openai, {
+  systemPrompt: "You are a helpful assistant.",
+  onDetection: "block", // default
+});
+
+// Throws InjectionDetectedError on malicious input
+await client.chat.completions.create({ ... });
+```
+
+### Warn Mode
+
+Logs warnings without throwing, allowing requests to proceed:
+
+```typescript
+const client = shieldOpenAI(openai, {
+  systemPrompt: "You are a helpful assistant.",
+  onDetection: "warn", // only log, don't throw
+  onInjectionDetected: (result) => {
+    console.warn("Injection detected but allowing:", result);
+  },
+});
+
+// Request proceeds even with malicious input (not recommended for production)
+await client.chat.completions.create({ ... });
+```
+
+<Warning>
+  Using `onDetection: "warn"` in production is not recommended. It should only be used during development, testing, or when you have additional security controls in place.
+</Warning>
+
+## Leak Detection Configuration
+
+By default, leaked content is redacted. Enable `throwOnLeak` to throw an error instead:
+
+```typescript
+const client = shieldOpenAI(openai, {
+  systemPrompt: "You are a financial advisor. Never share account numbers.",
+  throwOnLeak: true, // throw instead of redacting
+});
+
+try {
+  const response = await client.chat.completions.create({ ... });
+} catch (error) {
+  if (error instanceof LeakDetectedError) {
+    logger.error("System prompt leaked", {
+      confidence: error.confidence,
+      fragments: error.fragmentCount,
+    });
+    // Return generic error to user
+    return { error: "Unable to process request" };
+  }
+}
+```
+
+<Tip>
+  For most applications, redaction (default) is preferred over throwing. Use `throwOnLeak: true` when you need strict guarantees that no leaked content reaches users.
+</Tip>
+
+## Error Property Reference
+
+### InjectionDetectedError Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | `"InjectionDetectedError"` | Error class name |
+| `code` | `"INJECTION_DETECTED"` | Error code |
+| `message` | `string` | Human-readable error message |
+| `risk` | `string` | Risk level: `"low"`, `"medium"`, `"high"`, or `"critical"` |
+| `categories` | `string[]` | Attack categories detected |
+
+### LeakDetectedError Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | `"LeakDetectedError"` | Error class name |
+| `code` | `"LEAK_DETECTED"` | Error code |
+| `message` | `string` | Human-readable error message |
+| `confidence` | `number` | Leak confidence score (0-1) |
+| `fragmentCount` | `number` | Number of leaked fragments detected |

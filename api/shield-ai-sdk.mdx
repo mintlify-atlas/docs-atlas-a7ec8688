@@ -1,0 +1,240 @@
+---
+title: AI SDK Middleware
+description: Vercel AI SDK integration with automatic prompt hardening, injection detection, and leak sanitization
+---
+
+## shieldLanguageModelMiddleware()
+
+### Function Signature
+
+```typescript
+function shieldLanguageModelMiddleware(options?: ShieldAISdkOptions): {
+  middlewareVersion: "v1";
+  transformParams: (opts: {
+    type: "generate" | "stream";
+    params: { prompt?: Array<{ role: string; content: unknown }> };
+  }) => Promise<{ prompt?: Array<{ role: string; content: unknown }> }>;
+  wrapGenerate: (opts: {
+    doGenerate: () => Promise<{ text?: string; [key: string]: unknown }>;
+    params: { prompt?: Array<{ role: string; content: unknown }> };
+  }) => Promise<{ text?: string; [key: string]: unknown }>;
+  wrapStream?: (opts: {
+    doStream: () => Promise<{
+      stream: ReadableStream<{ type: string; textDelta?: string }>;
+      [key: string]: unknown;
+    }>;
+    params: { prompt?: Array<{ role: string; content: unknown }> };
+  }) => Promise<{
+    stream: ReadableStream<{ type: string; textDelta?: string }>;
+    [key: string]: unknown;
+  }>;
+}
+```
+
+Creates an AI SDK Language Model middleware for use with `wrapLanguageModel`. This is the **recommended** approach for Vercel AI SDK integration.
+
+### Why Use This?
+
+With `shieldLanguageModelMiddleware`, you get:
+- **Automatic sanitization**: No need to manually call `sanitizeOutput`
+- **Both generate and stream**: Works with `generateText`, `streamText`, and all AI SDK functions
+- **Clean API**: Just wrap your model once and use it everywhere
+
+### Examples
+
+#### Basic Usage with generateText
+
+```typescript
+import { wrapLanguageModel, generateText } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { shieldLanguageModelMiddleware } from "@zeroleaks/shield/ai-sdk";
+
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const model = wrapLanguageModel({
+  model: openai("gpt-5.3-codex"),
+  middleware: shieldLanguageModelMiddleware({ systemPrompt: "You are helpful." }),
+});
+
+const result = await generateText({ model, prompt: "Hi" });
+// result.text is automatically sanitized
+```
+
+#### Streaming with streamText
+
+```typescript
+import { wrapLanguageModel, streamText } from "ai";
+import { createOpenAI } from "@ai-sdk/openai";
+import { shieldLanguageModelMiddleware } from "@zeroleaks/shield/ai-sdk";
+
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const model = wrapLanguageModel({
+  model: openai("gpt-5.3-codex"),
+  middleware: shieldLanguageModelMiddleware({
+    systemPrompt: "You are a helpful assistant.",
+    streamingSanitize: "buffer", // Full buffer before sanitizing
+  }),
+});
+
+const { textStream } = await streamText({
+  model,
+  prompt: userInput,
+});
+
+for await (const chunk of textStream) {
+  process.stdout.write(chunk);
+}
+// Output is automatically sanitized
+```
+
+#### Custom Detection Callbacks
+
+```typescript
+const model = wrapLanguageModel({
+  model: openai("gpt-5.3-codex"),
+  middleware: shieldLanguageModelMiddleware({
+    systemPrompt: "You are helpful.",
+    onDetection: "warn",
+    onInjectionDetected: (result) => {
+      console.warn(`Injection: ${result.risk} risk`);
+    },
+    onLeakDetected: (result) => {
+      console.warn(`Leak: ${result.confidence} confidence`);
+    },
+  }),
+});
+```
+
+---
+
+## shieldMiddleware()
+
+### Function Signature
+
+```typescript
+function shieldMiddleware(options?: ShieldAISdkOptions): {
+  wrapParams(params: AISdkParams): AISdkParams;
+  sanitizeOutput(text: string, systemPrompt?: string): string;
+}
+```
+
+Creates a middleware object with manual `wrapParams` and `sanitizeOutput` methods. Use this for **legacy code** or when you need fine-grained control.
+
+### Why Use This?
+
+Use `shieldMiddleware` when:
+- You need to manually control when sanitization happens
+- You're migrating existing code incrementally
+- You want to apply different Shield configs per-request
+
+For new code, prefer `shieldLanguageModelMiddleware` instead.
+
+### Examples
+
+#### Manual wrapParams + sanitizeOutput
+
+```typescript
+import { generateText } from "ai";
+import { shieldMiddleware } from "@zeroleaks/shield/ai-sdk";
+
+const shield = shieldMiddleware({ systemPrompt: "..." });
+
+const result = await generateText({
+  model: openai("gpt-5.3-codex"),
+  ...shield.wrapParams({
+    system: "You are a helpful assistant.",
+    prompt: userInput,
+  }),
+});
+
+const safeOutput = shield.sanitizeOutput(result.text);
+```
+
+#### Streaming with Manual Accumulation
+
+```typescript
+import { streamText } from "ai";
+import { shieldMiddleware } from "@zeroleaks/shield/ai-sdk";
+
+const shield = shieldMiddleware({ systemPrompt: "You are helpful." });
+
+const { textStream } = await streamText({
+  model: openai("gpt-5.3-codex"),
+  ...shield.wrapParams({
+    system: "You are helpful.",
+    prompt: userInput,
+  }),
+});
+
+let accumulated = "";
+for await (const chunk of textStream) {
+  accumulated += chunk;
+}
+
+const safeOutput = shield.sanitizeOutput(accumulated);
+```
+
+---
+
+## ShieldAISdkOptions
+
+Both `shieldLanguageModelMiddleware` and `shieldMiddleware` accept the same options:
+
+<ParamField path="systemPrompt" type="string">
+  System prompt used for sanitization. When omitted, Shield automatically derives it from the `system` parameter or prompt array.
+</ParamField>
+
+<ParamField path="harden" type="HardenOptions | false" default="{}">
+  Options for prompt hardening. Set to `false` to disable hardening. See [harden()](/api/harden) for available options.
+</ParamField>
+
+<ParamField path="detect" type="DetectOptions | false" default="{}">
+  Options for injection detection. Set to `false` to disable detection. See [detect()](/api/detect) for available options.
+</ParamField>
+
+<ParamField path="sanitize" type="SanitizeOptions | false" default="{}">
+  Options for output sanitization. Set to `false` to disable sanitization. See [sanitize()](/api/sanitize) for available options.
+</ParamField>
+
+<ParamField path="streamingSanitize" type="'buffer' | 'chunked' | 'passthrough'" default="'buffer'">
+  Streaming sanitization strategy (only applies to `shieldLanguageModelMiddleware`):
+  - `"buffer"`: Accumulate the full stream, then sanitize (higher memory, more accurate)
+  - `"chunked"`: Process in 8KB chunks (lower memory for long streams)
+  - `"passthrough"`: Skip sanitization entirely (use when you accept the risk)
+</ParamField>
+
+<ParamField path="streamingChunkSize" type="number" default="8192">
+  Chunk size in bytes for `"chunked"` mode. Only applies when `streamingSanitize` is set to `"chunked"`.
+</ParamField>
+
+<ParamField path="onDetection" type="'block' | 'warn'" default="'block'">
+  Behavior when injection is detected:
+  - `"block"`: Throw `InjectionDetectedError` (request fails)
+  - `"warn"`: Only invoke `onInjectionDetected` callback (request continues)
+</ParamField>
+
+<ParamField path="throwOnLeak" type="boolean" default="false">
+  When `true`, throw `LeakDetectedError` instead of redacting leaked content. Use for strict security policies where any leak should abort the request.
+</ParamField>
+
+<ParamField path="onInjectionDetected" type="(result: DetectResult) => void">
+  Callback invoked when an injection is detected. Receives the full `DetectResult` with risk level and matched patterns.
+</ParamField>
+
+<ParamField path="onLeakDetected" type="(result: SanitizeResult) => void">
+  Callback invoked when a prompt leak is detected in the output. Receives the full `SanitizeResult` with confidence score and leaked fragments.
+</ParamField>
+
+## Comparison: Middleware vs. Manual
+
+| Feature | `shieldLanguageModelMiddleware` | `shieldMiddleware` |
+|---------|--------------------------------|--------------------|
+| Automatic sanitization | ✅ Yes | ❌ Manual |
+| Streaming support | ✅ Built-in | ⚠️ Manual accumulation |
+| API simplicity | ✅ Wrap once, use everywhere | ⚠️ Call per request |
+| Recommended for | New code | Legacy code |
+
+## Notes
+
+- **Auto-derived system prompt**: When `systemPrompt` is not provided, Shield extracts it from the `system` parameter or the first system message in the prompt array.
+- **Multi-part messages**: AI SDK supports `content` as `string | MessagePart[]`. Shield extracts text from all parts for injection detection.
+- **Streaming**: With `shieldLanguageModelMiddleware`, streaming is handled automatically. With `shieldMiddleware`, you must accumulate the stream and call `sanitizeOutput` manually.

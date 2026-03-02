@@ -1,0 +1,317 @@
+---
+title: Anthropic
+description: Wrap Anthropic clients for automatic protection against prompt injection and leakage
+---
+
+# Anthropic Provider
+
+The `shieldAnthropic` wrapper protects Anthropic clients by hardening system prompts, detecting injections in user input, and sanitizing model output to prevent leaks.
+
+## Installation
+
+```bash
+npm install @zeroleaks/shield @anthropic-ai/sdk
+```
+
+## Quick Start
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+import { shieldAnthropic } from "@zeroleaks/shield/anthropic";
+
+const client = shieldAnthropic(new Anthropic(), {
+  systemPrompt: "You are a support agent...",
+});
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  system: "You are a support agent...",
+  messages: [{ role: "user", content: userInput }],
+  max_tokens: 1024,
+});
+```
+
+## Configuration Options
+
+### Basic Options
+
+<ParamField path="systemPrompt" type="string" optional>
+  System prompt for sanitization. When omitted, derived from the `system` parameter in the request.
+</ParamField>
+
+<ParamField path="onDetection" type="'block' | 'warn'" default="block">
+  - `"block"`: Throws `InjectionDetectedError` when injection is detected
+  - `"warn"`: Only invokes `onInjectionDetected` callback without blocking
+</ParamField>
+
+<ParamField path="throwOnLeak" type="boolean" default={false}>
+  When `true`, throws `LeakDetectedError` instead of redacting leaked content.
+</ParamField>
+
+### Feature Flags
+
+<ParamField path="harden" type="HardenOptions | false" optional>
+  Options for system prompt hardening. Set to `false` to disable hardening entirely.
+</ParamField>
+
+<ParamField path="detect" type="DetectOptions | false" optional>
+  Options for injection detection. Set to `false` to disable detection entirely.
+</ParamField>
+
+<ParamField path="sanitize" type="SanitizeOptions | false" optional>
+  Options for output sanitization. Set to `false` to disable sanitization entirely.
+</ParamField>
+
+### Streaming Options
+
+<ParamField path="streamingSanitize" type="'buffer' | 'chunked' | 'passthrough'" default="buffer">
+  Controls how streaming responses are sanitized:
+  - `"buffer"`: Accumulates full response then sanitizes (higher memory, more accurate)
+  - `"chunked"`: Sanitizes in 8KB chunks (lower memory for long streams)
+  - `"passthrough"`: Skip sanitization for streams (use when you accept the risk)
+</ParamField>
+
+<ParamField path="streamingChunkSize" type="number" default={8192}>
+  Chunk size in bytes for `"chunked"` mode.
+</ParamField>
+
+### Callbacks
+
+<ParamField path="onInjectionDetected" type="(result: DetectResult) => void" optional>
+  Invoked when injection is detected. Receives detection result with risk level and matched patterns.
+</ParamField>
+
+<ParamField path="onLeakDetected" type="(result: SanitizeResult) => void" optional>
+  Invoked when a prompt leak is detected in the output. Receives sanitization result with confidence score.
+</ParamField>
+
+## Streaming Support
+
+Shield automatically handles both regular and streaming responses:
+
+<Tabs>
+  <Tab title="Regular Response">
+    ```typescript
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      system: "You are a helpful assistant.",
+      messages: [{ role: "user", content: userInput }],
+      max_tokens: 1024,
+    });
+
+    console.log(response.content[0].text);
+    // Automatically sanitized
+    ```
+  </Tab>
+  <Tab title="Streaming Response">
+    ```typescript
+    const stream = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      system: "You are a helpful assistant.",
+      messages: [{ role: "user", content: userInput }],
+      max_tokens: 1024,
+      stream: true,
+    });
+
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta?.text) {
+        process.stdout.write(event.delta.text);
+        // Automatically sanitized chunks
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Chunked Sanitization">
+    ```typescript
+    // For very long streams, use chunked mode to limit memory
+    const client = shieldAnthropic(new Anthropic(), {
+      systemPrompt: "You are a helpful assistant.",
+      streamingSanitize: "chunked",
+      streamingChunkSize: 8192, // 8KB chunks
+    });
+
+    const stream = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      system: "You are a helpful assistant.",
+      messages: [{ role: "user", content: userInput }],
+      max_tokens: 1024,
+      stream: true,
+    });
+
+    for await (const event of stream) {
+      if (event.type === "content_block_delta" && event.delta?.text) {
+        process.stdout.write(event.delta.text);
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Multi-part System Prompts
+
+Anthropic supports system prompts as strings or arrays of text blocks. Shield handles both formats:
+
+```typescript
+const response = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  system: [
+    { type: "text", text: "You are a helpful assistant." },
+    { type: "text", text: "You specialize in technical support." },
+  ],
+  messages: [{ role: "user", content: userInput }],
+  max_tokens: 1024,
+});
+// All text blocks are hardened and used for sanitization
+```
+
+## Multi-part Messages
+
+Shield extracts text from multi-part messages for injection detection:
+
+```typescript
+const response = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  system: "You are a helpful assistant.",
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "What's in this image?" },
+        { type: "image", source: { type: "url", url: "https://..." } },
+      ],
+    },
+  ],
+  max_tokens: 1024,
+});
+// Text parts are scanned for injection, images are passed through
+```
+
+## Tool Use
+
+Shield automatically sanitizes tool use inputs to prevent prompt leakage through tool parameters:
+
+```typescript
+const response = await client.messages.create({
+  model: "claude-sonnet-4-6",
+  system: "You are a helpful assistant.",
+  messages: [{ role: "user", content: userInput }],
+  max_tokens: 1024,
+  tools: [
+    {
+      name: "send_email",
+      description: "Send an email",
+      input_schema: {
+        type: "object",
+        properties: {
+          to: { type: "string" },
+          subject: { type: "string" },
+          body: { type: "string" },
+        },
+      },
+    },
+  ],
+});
+
+const toolBlock = response.content.find((block) => block.type === "tool_use");
+if (toolBlock && toolBlock.type === "tool_use") {
+  // toolBlock.input is automatically sanitized
+  console.log(toolBlock.input);
+}
+```
+
+## Error Handling
+
+```typescript
+import {
+  shieldAnthropic,
+  InjectionDetectedError,
+  LeakDetectedError,
+} from "@zeroleaks/shield/anthropic";
+
+try {
+  const client = shieldAnthropic(new Anthropic(), {
+    systemPrompt: "You are a helpful assistant.",
+    throwOnLeak: true,
+  });
+
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-6",
+    system: "You are a helpful assistant.",
+    messages: [{ role: "user", content: userInput }],
+    max_tokens: 1024,
+  });
+} catch (error) {
+  if (error instanceof InjectionDetectedError) {
+    console.error(`Injection detected: ${error.risk} risk`);
+    console.error(`Categories: ${error.categories.join(", ")}`);
+  }
+  if (error instanceof LeakDetectedError) {
+    console.error(`Leak detected: ${error.confidence} confidence`);
+    console.error(`Fragments: ${error.fragmentCount}`);
+  }
+}
+```
+
+## Advanced Usage
+
+<Tabs>
+  <Tab title="Custom Detection Patterns">
+    ```typescript
+    const client = shieldAnthropic(new Anthropic(), {
+      systemPrompt: "You are a helpful assistant.",
+      detect: {
+        threshold: "high",
+        customPatterns: [
+          {
+            category: "custom_command",
+            regex: /execute order \d+/i,
+            risk: "high",
+          },
+        ],
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Custom Hardening Rules">
+    ```typescript
+    const client = shieldAnthropic(new Anthropic(), {
+      systemPrompt: "You are a financial advisor.",
+      harden: {
+        customRules: [
+          "Never share specific investment recommendations.",
+          "Always include risk disclaimers.",
+        ],
+        position: "prepend",
+      },
+    });
+    ```
+  </Tab>
+  <Tab title="Monitoring & Logging">
+    ```typescript
+    const client = shieldAnthropic(new Anthropic(), {
+      systemPrompt: "You are a helpful assistant.",
+      onInjectionDetected: (result) => {
+        console.warn(`Injection attempt blocked:`, {
+          risk: result.risk,
+          categories: result.matches.map((m) => m.category),
+          timestamp: new Date().toISOString(),
+        });
+      },
+      onLeakDetected: (result) => {
+        console.warn(`Prompt leak detected:`, {
+          confidence: result.confidence,
+          fragmentCount: result.fragments.length,
+          timestamp: new Date().toISOString(),
+        });
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Related
+
+- [Core API](/core/harden) - Standalone functions for custom integrations
+- [OpenAI Provider](/providers/openai) - OpenAI SDK integration
+- [Groq Provider](/providers/groq) - Groq SDK integration
+- [Vercel AI SDK](/providers/vercel-ai-sdk) - Universal AI SDK integration

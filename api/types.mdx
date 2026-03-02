@@ -1,0 +1,311 @@
+---
+title: Types
+description: TypeScript types and interfaces for Shield
+---
+
+Shield exports TypeScript types and interfaces for all configuration options and return values.
+
+## Core Types
+
+### HardenOptions
+
+Configuration options for the `harden()` function.
+
+```typescript
+interface HardenOptions {
+  skipPersonaAnchor?: boolean;
+  skipAntiExtraction?: boolean;
+  customRules?: string[];
+  position?: "prepend" | "append";
+}
+```
+
+<ResponseField name="skipPersonaAnchor" type="boolean" default="false">
+  Skip persona-binding rule that prevents role hijacking
+</ResponseField>
+
+<ResponseField name="skipAntiExtraction" type="boolean" default="false">
+  Skip anti-extraction rules that prevent prompt extraction attempts
+</ResponseField>
+
+<ResponseField name="customRules" type="string[]" default="[]">
+  Additional custom security rules to inject into the system prompt
+</ResponseField>
+
+<ResponseField name="position" type="'prepend' | 'append'" default="'append'">
+  Where to add security rules in the prompt (beginning or end)
+</ResponseField>
+
+### DetectOptions
+
+Configuration options for the `detect()` and `detectAsync()` functions.
+
+```typescript
+interface DetectOptions {
+  threshold?: "low" | "medium" | "high" | "critical";
+  customPatterns?: Array<{
+    category: string;
+    regex: RegExp;
+    risk: "low" | "medium" | "high" | "critical";
+  }>;
+  excludeCategories?: string[];
+  allowPhrases?: string[];
+  secondaryDetector?: (
+    input: string,
+    result: DetectResult
+  ) => Promise<DetectResult | null>;
+  maxInputLength?: number;
+}
+```
+
+<ResponseField name="threshold" type="'low' | 'medium' | 'high' | 'critical'" default="'medium'">
+  Minimum risk level to flag as detected. Only injections at or above this risk level will be flagged.
+</ResponseField>
+
+<ResponseField name="customPatterns" type="Array<{category: string, regex: RegExp, risk: string}>" default="[]">
+  Custom detection patterns to add to the built-in pattern library. Each pattern requires:
+  - `category`: Name for the injection category
+  - `regex`: Regular expression to match
+  - `risk`: Risk level ("low", "medium", "high", or "critical")
+</ResponseField>
+
+<ResponseField name="excludeCategories" type="string[]" default="[]">
+  Categories to skip during detection. Use `["social_engineering"]` to allow phrases like "for research purposes only" in legitimate contexts.
+</ResponseField>
+
+<ResponseField name="allowPhrases" type="string[]" default="[]">
+  Whitelist phrases (case-insensitive). If input contains one of these phrases, detection is suppressed. Use sparingly for known-benign strings.
+</ResponseField>
+
+<ResponseField name="secondaryDetector" type="(input: string, result: DetectResult) => Promise<DetectResult | null>">
+  Optional async verifier function. When detection fires, this function is called with the input and initial result. Return `{ detected: false }` to override the detection (e.g., after LLM verification), or `null` to keep the original result. Only available with `detectAsync()`.
+</ResponseField>
+
+<ResponseField name="maxInputLength" type="number" default="1048576">
+  Maximum input length to scan. Input beyond this length will be truncated.
+</ResponseField>
+
+### DetectResult
+
+Return value from `detect()` and `detectAsync()` functions.
+
+```typescript
+interface DetectResult {
+  detected: boolean;
+  risk: "none" | "low" | "medium" | "high" | "critical";
+  matches: Array<{
+    category: string;
+    pattern: string;
+    confidence: number;
+  }>;
+}
+```
+
+<ResponseField name="detected" type="boolean">
+  Whether a prompt injection was detected
+</ResponseField>
+
+<ResponseField name="risk" type="'none' | 'low' | 'medium' | 'high' | 'critical'">
+  Highest risk level among all detected patterns. "none" if no injection was detected.
+</ResponseField>
+
+<ResponseField name="matches" type="Array<{category: string, pattern: string, confidence: number}>">
+  Array of all matched injection patterns. Each match includes:
+  - `category`: The injection category (e.g., "instruction_override", "role_hijack")
+  - `pattern`: Truncated regex pattern that matched (first 60 characters)
+  - `confidence`: Confidence score for the match (0-1)
+</ResponseField>
+
+### SanitizeOptions
+
+Configuration options for the `sanitize()` and `sanitizeObject()` functions.
+
+```typescript
+interface SanitizeOptions {
+  ngramSize?: number;
+  threshold?: number;
+  wordOverlapThreshold?: number;
+  redactionText?: string;
+  detectOnly?: boolean;
+}
+```
+
+<ResponseField name="ngramSize" type="number" default="4">
+  N-gram window size for matching leaked prompt fragments. Larger values reduce false positives but may miss shorter leaks.
+</ResponseField>
+
+<ResponseField name="threshold" type="number" default="0.7">
+  Confidence threshold (0-1) for classifying output as leaked. Lower values are more sensitive but may produce false positives.
+</ResponseField>
+
+<ResponseField name="wordOverlapThreshold" type="number" default="0.25">
+  Jaccard word overlap threshold for detecting paraphrased leaks. Higher values require more overlap to flag as leaked.
+</ResponseField>
+
+<ResponseField name="redactionText" type="string" default="'[REDACTED]'">
+  Replacement text for redacted leaked content
+</ResponseField>
+
+<ResponseField name="detectOnly" type="boolean" default="false">
+  When `true`, only detect leaks without redacting them. The `sanitized` field will match the original output.
+</ResponseField>
+
+### SanitizeResult
+
+Return value from the `sanitize()` function.
+
+```typescript
+interface SanitizeResult {
+  leaked: boolean;
+  confidence: number;
+  fragments: string[];
+  sanitized: string;
+}
+```
+
+<ResponseField name="leaked" type="boolean">
+  Whether a system prompt leak was detected in the output
+</ResponseField>
+
+<ResponseField name="confidence" type="number">
+  Confidence score (0-1) for the leak detection. Higher values indicate stronger evidence of leakage.
+</ResponseField>
+
+<ResponseField name="fragments" type="string[]">
+  Array of detected leaked fragments from the system prompt
+</ResponseField>
+
+<ResponseField name="sanitized" type="string">
+  Output with leaked fragments redacted (or original output if `detectOnly: true`)
+</ResponseField>
+
+## Provider Types
+
+Configuration options for provider wrapper functions. All providers share a common set of options.
+
+### ShieldOpenAIOptions
+
+Options for `shieldOpenAI()`.
+
+```typescript
+interface ShieldOpenAIOptions {
+  systemPrompt?: string;
+  harden?: HardenOptions | false;
+  detect?: DetectOptions | false;
+  sanitize?: SanitizeOptions | false;
+  streamingSanitize?: "buffer" | "chunked" | "passthrough";
+  streamingChunkSize?: number;
+  onDetection?: "block" | "warn";
+  throwOnLeak?: boolean;
+  onInjectionDetected?: (result: DetectResult) => void;
+  onLeakDetected?: (result: SanitizeResult) => void;
+}
+```
+
+<ResponseField name="systemPrompt" type="string">
+  System prompt for sanitization. When omitted, automatically derived from the first system message in the request.
+</ResponseField>
+
+<ResponseField name="harden" type="HardenOptions | false" default="{}">
+  Options for hardening system prompts. Set to `false` to disable hardening.
+</ResponseField>
+
+<ResponseField name="detect" type="DetectOptions | false" default="{}">
+  Options for injection detection. Set to `false` to disable detection.
+</ResponseField>
+
+<ResponseField name="sanitize" type="SanitizeOptions | false" default="{}">
+  Options for output sanitization. Set to `false` to disable sanitization.
+</ResponseField>
+
+<ResponseField name="streamingSanitize" type="'buffer' | 'chunked' | 'passthrough'" default="'buffer'">
+  Sanitization strategy for streaming responses:
+  - `"buffer"`: Buffer full response then sanitize (highest accuracy)
+  - `"chunked"`: Sanitize in 8KB chunks (lower memory for long streams)
+  - `"passthrough"`: Skip sanitization (fastest but no leak protection)
+</ResponseField>
+
+<ResponseField name="streamingChunkSize" type="number" default="8192">
+  Chunk size in bytes for `"chunked"` streaming mode
+</ResponseField>
+
+<ResponseField name="onDetection" type="'block' | 'warn'" default="'block'">
+  Behavior when injection is detected:
+  - `"block"`: Throw `InjectionDetectedError` (recommended)
+  - `"warn"`: Only invoke `onInjectionDetected` callback without blocking
+</ResponseField>
+
+<ResponseField name="throwOnLeak" type="boolean" default="false">
+  When `true`, throw `LeakDetectedError` instead of redacting leaked content
+</ResponseField>
+
+<ResponseField name="onInjectionDetected" type="(result: DetectResult) => void">
+  Callback invoked when injection is detected. Receives the full `DetectResult`.
+</ResponseField>
+
+<ResponseField name="onLeakDetected" type="(result: SanitizeResult) => void">
+  Callback invoked when a leak is detected in model output. Receives the full `SanitizeResult`.
+</ResponseField>
+
+### ShieldAnthropicOptions
+
+Options for `shieldAnthropic()`. Identical to `ShieldOpenAIOptions`.
+
+```typescript
+interface ShieldAnthropicOptions {
+  systemPrompt?: string;
+  harden?: HardenOptions | false;
+  detect?: DetectOptions | false;
+  sanitize?: SanitizeOptions | false;
+  streamingSanitize?: "buffer" | "chunked" | "passthrough";
+  streamingChunkSize?: number;
+  onDetection?: "block" | "warn";
+  throwOnLeak?: boolean;
+  onInjectionDetected?: (result: DetectResult) => void;
+  onLeakDetected?: (result: SanitizeResult) => void;
+}
+```
+
+See [ShieldOpenAIOptions](#shieldopenai-options) for field descriptions.
+
+### ShieldGroqOptions
+
+Options for `shieldGroq()`. Identical to `ShieldOpenAIOptions`.
+
+```typescript
+interface ShieldGroqOptions {
+  systemPrompt?: string;
+  harden?: HardenOptions | false;
+  detect?: DetectOptions | false;
+  sanitize?: SanitizeOptions | false;
+  streamingSanitize?: "buffer" | "chunked" | "passthrough";
+  streamingChunkSize?: number;
+  onDetection?: "block" | "warn";
+  throwOnLeak?: boolean;
+  onInjectionDetected?: (result: DetectResult) => void;
+  onLeakDetected?: (result: SanitizeResult) => void;
+}
+```
+
+See [ShieldOpenAIOptions](#shieldopenai-options) for field descriptions.
+
+### ShieldAISdkOptions
+
+Options for `shieldMiddleware()` and `shieldLanguageModelMiddleware()`.
+
+```typescript
+interface ShieldAISdkOptions {
+  systemPrompt?: string;
+  harden?: HardenOptions | false;
+  detect?: DetectOptions | false;
+  sanitize?: SanitizeOptions | false;
+  streamingSanitize?: "buffer" | "chunked" | "passthrough";
+  streamingChunkSize?: number;
+  onDetection?: "block" | "warn";
+  throwOnLeak?: boolean;
+  onInjectionDetected?: (result: DetectResult) => void;
+  onLeakDetected?: (result: SanitizeResult) => void;
+}
+```
+
+See [ShieldOpenAIOptions](#shieldopenai-options) for field descriptions.

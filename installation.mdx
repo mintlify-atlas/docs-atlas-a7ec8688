@@ -1,0 +1,102 @@
+---
+title: Installation
+description: Install Shield and configure your environment to start protecting your LLM applications.
+---
+
+# Installation
+
+Install Shield using your preferred package manager:
+
+<CodeGroup>
+
+```bash npm
+npm install @zeroleaks/shield
+```
+
+```bash yarn
+yarn add @zeroleaks/shield
+```
+
+```bash pnpm
+pnpm add @zeroleaks/shield
+```
+
+```bash bun
+bun add @zeroleaks/shield
+```
+
+</CodeGroup>
+
+## Requirements
+
+Shield requires the following minimum versions:
+
+- **Node.js** 18+ or **Bun** 1.0+
+- **TypeScript** 5.0+ (optional, for type definitions)
+
+## Optional peer dependencies
+
+Provider wrappers require the corresponding SDK as a peer dependency. Install only the ones you need:
+
+### OpenAI
+
+```bash
+npm install openai
+```
+
+Required for `shieldOpenAI`. Minimum version: `openai >= 4.0.0`
+
+### Anthropic
+
+```bash
+npm install @anthropic-ai/sdk
+```
+
+Required for `shieldAnthropic`. Minimum version: `@anthropic-ai/sdk >= 0.20.0`
+
+### Groq
+
+```bash
+npm install groq-sdk
+```
+
+Required for `shieldGroq`. Minimum version: `groq-sdk >= 0.3.0`
+
+### Vercel AI SDK
+
+```bash
+npm install ai
+```
+
+Required for `shieldMiddleware` and `shieldLanguageModelMiddleware`. Minimum version: `ai >= 3.0.0`
+
+<Tip>
+All peer dependencies are optional. You only need to install the SDKs for the providers you plan to use.
+</Tip>
+
+## Verification
+
+Verify your installation by importing the core functions:
+
+```typescript
+import { harden, detect, sanitize } from "@zeroleaks/shield";
+
+console.log("Shield installed successfully!");
+```
+
+If using provider wrappers, verify the import:
+
+```typescript
+import { shieldOpenAI } from "@zeroleaks/shield/openai";
+import { shieldAnthropic } from "@zeroleaks/shield/anthropic";
+import { shieldGroq } from "@zeroleaks/shield/groq";
+import { shieldMiddleware } from "@zeroleaks/shield/ai-sdk";
+
+console.log("Provider wrappers imported successfully!");
+```
+
+## Next steps
+
+<Card title="Quickstart" icon="rocket" href="/quickstart">
+  Learn how to use Shield in your application
+</Card>

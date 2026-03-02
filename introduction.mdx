@@ -1,0 +1,91 @@
+---
+title: Introduction
+description: Runtime prompt security for LLM applications. Harden system prompts, detect prompt injections, and sanitize model output to prevent leaks -- all in under 5ms.
+---
+
+# Introduction
+
+Shield is a runtime prompt security SDK for LLM applications. It provides fast, heuristic-based protection to harden system prompts, detect prompt injections, and sanitize model output to prevent leaks.
+
+## Key features
+
+Shield provides comprehensive security controls for LLM applications:
+
+- **Harden prompts** - Inject security rules into system prompts to prevent instruction overrides and prompt extraction
+- **Detect injections** - Scan user input for 10+ attack categories including jailbreaks, role hijacking, and tool exploitation
+- **Sanitize output** - Block leaked system prompt fragments using n-gram matching and paraphrased leak detection
+- **Provider wrappers** - Drop-in wrappers for OpenAI, Anthropic, Groq, and Vercel AI SDK
+- **Sub-5ms performance** - Typical latency: `detect` &lt;2ms, `harden` &lt;0.5ms, `sanitize` &lt;3ms for inputs up to ~8KB
+- **Typed errors** - Structured error handling with `InjectionDetectedError`, `LeakDetectedError`, and `ShieldError`
+
+## Quick links
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with Shield in under 5 minutes
+  </Card>
+  <Card title="Core functions" icon="shield" href="/core/harden">
+    Learn about harden, detect, and sanitize
+  </Card>
+  <Card title="Provider wrappers" icon="plug" href="/providers/openai">
+    Integrate with OpenAI, Anthropic, Groq, and more
+  </Card>
+</CardGroup>
+
+## Use cases
+
+Shield helps protect your LLM applications from common security threats:
+
+### Protect production LLM apps
+
+Add runtime security controls to detect and block prompt injection attacks before they reach your model. Shield catches direct instruction overrides, jailbreaks, role hijacking, and tool exploitation attempts.
+
+### Prevent prompt leaks
+
+Sanitize model output to block leaked system prompt fragments. Shield uses n-gram matching to detect both exact and paraphrased leaks, protecting your proprietary instructions and business logic.
+
+### Block sophisticated injections
+
+Detect advanced attack patterns including:
+- Authority exploitation (fake SYSTEM/ADMIN messages)
+- Indirect injection (hidden instructions in documents)
+- Encoding attacks (base64, unicode, reversed text)
+- Protocol exploits (MCP context updates, .cursorrules manipulation)
+- Tool hijacking (curl exfiltration, SSRF, RCE attempts)
+
+## Threat model
+
+Shield provides heuristic-based, real-time protection designed for speed and complements -- but does not replace -- thorough security testing.
+
+<Note>
+**Defense in depth:** Use Shield as one layer of protection. Combine with input validation, output filtering, rate limiting, and periodic red-team scanning. Do not rely on Shield as the sole security control for high-risk applications.
+</Note>
+
+### What it catches
+
+- Direct instruction overrides and jailbreaks
+- Role hijacking and persona injection
+- Prompt extraction attempts
+- Authority exploitation (fake system/admin messages)
+- Tool hijacking patterns (curl exfil, SSRF, RCE)
+- Indirect injection (hidden instructions in documents)
+- Encoding attacks (base64, unicode, reversed text)
+- Output leakage of system prompt fragments
+
+### What it does not catch
+
+- Novel, zero-day attack patterns not in the pattern library
+- Semantic attacks that avoid keyword-based detection
+- Complex multi-turn escalation (use [ZeroLeaks](https://zeroleaks.ai) scanning for this)
+- Attacks in non-English languages (partial coverage)
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Shield and configure your environment
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first protected LLM application
+  </Card>
+</CardGroup>

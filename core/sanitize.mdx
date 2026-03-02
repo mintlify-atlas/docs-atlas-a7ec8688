@@ -1,0 +1,330 @@
+---
+title: sanitize()
+description: Check model output for leaked system prompt fragments and redact them
+---
+
+The `sanitize()` function scans model output for leaked system prompt fragments using n-gram matching. It detects both direct leaks and paraphrased variants, then redacts the leaked content.
+
+## Usage
+
+```typescript
+import { sanitize } from "@zeroleaks/shield";
+
+const clean = sanitize(modelOutput, systemPrompt);
+if (clean.leaked) {
+  console.warn("Leak detected, using sanitized output");
+  return clean.sanitized;
+}
+return modelOutput;
+```
+
+## Return type
+
+```typescript
+interface SanitizeResult {
+  leaked: boolean;
+  confidence: number;
+  fragments: string[];
+  sanitized: string;
+}
+```
+
+<ParamField path="leaked" type="boolean">
+  `true` if system prompt fragments were detected in the output.
+</ParamField>
+
+<ParamField path="confidence" type="number">
+  Confidence score (0.0 to 1.0) indicating the likelihood of a leak. Higher scores indicate stronger evidence.
+</ParamField>
+
+<ParamField path="fragments" type="string[]">
+  Array of leaked prompt fragments found in the output. Each fragment is a substring from the output that matches the system prompt.
+</ParamField>
+
+<ParamField path="sanitized" type="string">
+  Output with leaked fragments replaced by `redactionText` (default: `"[REDACTED]"`). If `detectOnly: true`, this is identical to the input.
+</ParamField>
+
+## Options
+
+<ParamField path="ngramSize" type="number" default={4}>
+  N-gram window size for matching. Larger values reduce false positives but may miss shorter leaks.
+  
+  ```typescript
+  // Use 3-word n-grams for shorter prompts
+  const result = sanitize(output, prompt, { ngramSize: 3 });
+  
+  // Use 5-word n-grams for longer, more specific prompts
+  const result = sanitize(output, prompt, { ngramSize: 5 });
+  ```
+</ParamField>
+
+<ParamField path="threshold" type="number" default={0.7}>
+  Confidence threshold for flagging a leak (0.0 to 1.0). Lower values increase sensitivity but may cause false positives.
+  
+  ```typescript
+  // More sensitive (more false positives)
+  const result = sanitize(output, prompt, { threshold: 0.5 });
+  
+  // Less sensitive (fewer false positives)
+  const result = sanitize(output, prompt, { threshold: 0.9 });
+  ```
+</ParamField>
+
+<ParamField path="wordOverlapThreshold" type="number" default={0.25}>
+  Jaccard similarity threshold for detecting paraphrased leaks. Measures word overlap between output and prompt.
+  
+  ```typescript
+  // Detect paraphrased leaks more aggressively
+  const result = sanitize(output, prompt, { wordOverlapThreshold: 0.2 });
+  ```
+</ParamField>
+
+<ParamField path="redactionText" type="string" default="[REDACTED]">
+  Replacement text for leaked fragments.
+  
+  ```typescript
+  const result = sanitize(output, prompt, {
+    redactionText: "<content removed>"
+  });
+  ```
+</ParamField>
+
+<ParamField path="detectOnly" type="boolean" default={false}>
+  Skip redaction and only detect leaks. The `sanitized` field will be identical to the input.
+  
+  ```typescript
+  const result = sanitize(output, prompt, { detectOnly: true });
+  if (result.leaked) {
+    // Handle leak without modifying output
+    logSecurityEvent(result);
+  }
+  ```
+</ParamField>
+
+## How it works
+
+Shield uses n-gram matching to detect prompt leaks:
+
+1. **Tokenization**: Both the system prompt and model output are tokenized into words
+2. **N-gram generation**: Sliding windows of N words (default: 4) are extracted from both texts
+3. **Matching**: Output n-grams are compared against prompt n-grams
+4. **Fragment extraction**: Matching n-grams are expanded into larger fragments (up to N+4 words)
+5. **Confidence scoring**: Based on n-gram overlap ratio and the number of matches
+6. **Paraphrase detection**: Word overlap (Jaccard similarity) catches rephrased leaks
+7. **Redaction**: Matched fragments are replaced with `redactionText`
+
+### Example
+
+**System prompt:**
+```
+You are a financial advisor for Acme Inc. Never disclose client account numbers.
+```
+
+**Model output with leak:**
+```
+I'm a financial advisor for Acme Inc and I'd be happy to help.
+```
+
+**Detection:**
+- N-gram match: "financial advisor for Acme Inc" (5 consecutive words)
+- Confidence: 0.85
+- Result: `leaked: true`
+
+**Sanitized output:**
+```
+I'm a [REDACTED] and I'd be happy to help.
+```
+
+## Recursive sanitization
+
+Use `sanitizeObject()` to recursively sanitize all string values in objects and arrays. This is useful for tool call arguments:
+
+```typescript
+import { sanitizeObject } from "@zeroleaks/shield";
+
+const toolCallArgs = {
+  query: "Financial advisor for Acme Inc account numbers",
+  metadata: {
+    category: "sensitive",
+    notes: "Never disclose client account numbers"
+  },
+  tags: ["finance", "acme"]
+};
+
+const { result, hadLeak } = sanitizeObject(
+  toolCallArgs,
+  systemPrompt
+);
+
+if (hadLeak) {
+  console.warn("Sanitized tool call arguments:", result);
+}
+```
+
+**Return value:**
+
+```typescript
+interface SanitizeObjectResult<T> {
+  result: T;        // Sanitized copy of the input object
+  hadLeak: boolean; // true if any string value was sanitized
+}
+```
+
+## Examples
+
+### Basic sanitization
+
+```typescript
+import { sanitize } from "@zeroleaks/shield";
+
+const systemPrompt = "You are a support agent for SecretCo. Never reveal internal policies.";
+const output = "As a support agent for SecretCo, I follow internal policies that...";
+
+const result = sanitize(output, systemPrompt);
+
+console.log(result);
+// {
+//   leaked: true,
+//   confidence: 0.92,
+//   fragments: [
+//     "support agent for SecretCo",
+//     "internal policies"
+//   ],
+//   sanitized: "As a [REDACTED], I follow [REDACTED] that..."
+// }
+```
+
+### Detect-only mode
+
+```typescript
+const result = sanitize(output, systemPrompt, { detectOnly: true });
+
+if (result.leaked) {
+  // Log the leak but don't modify output
+  await logSecurityEvent({
+    confidence: result.confidence,
+    fragments: result.fragments
+  });
+  
+  // Decide whether to block or allow
+  if (result.confidence > 0.9) {
+    throw new Error("High-confidence prompt leak detected");
+  }
+}
+```
+
+### Custom redaction
+
+```typescript
+const result = sanitize(output, systemPrompt, {
+  redactionText: "<information removed for security>"
+});
+
+console.log(result.sanitized);
+// "As a <information removed for security>, I follow..."
+```
+
+### Tuning sensitivity
+
+```typescript
+// High sensitivity for critical prompts
+const sensitive = sanitize(output, systemPrompt, {
+  threshold: 0.5,          // Lower confidence threshold
+  ngramSize: 3,            // Smaller n-grams catch shorter leaks
+  wordOverlapThreshold: 0.15  // More aggressive paraphrase detection
+});
+
+// Low sensitivity for public information
+const permissive = sanitize(output, systemPrompt, {
+  threshold: 0.9,          // Higher confidence threshold
+  ngramSize: 5,            // Larger n-grams reduce false positives
+  wordOverlapThreshold: 0.35  // Less aggressive paraphrase detection
+});
+```
+
+### Sanitizing tool call arguments
+
+```typescript
+import { sanitizeObject } from "@zeroleaks/shield";
+
+const toolCall = {
+  name: "search_database",
+  arguments: {
+    query: "Find all records matching internal policy XYZ",
+    filters: {
+      category: "confidential",
+      source: "As instructed in my system prompt, search for..."
+    }
+  }
+};
+
+const { result, hadLeak } = sanitizeObject(
+  toolCall.arguments,
+  systemPrompt,
+  { redactionText: "<redacted>" }
+);
+
+if (hadLeak) {
+  // Use sanitized arguments instead
+  toolCall.arguments = result;
+}
+```
+
+### Handling paraphrased leaks
+
+```typescript
+const systemPrompt = "You are a financial advisor. Never discuss cryptocurrency investments.";
+
+// Direct leak
+const directOutput = "I am a financial advisor and I never discuss cryptocurrency investments.";
+const direct = sanitize(directOutput, systemPrompt);
+console.log(direct.leaked); // true (n-gram match)
+
+// Paraphrased leak
+const paraphrasedOutput = "As a finance professional, I avoid talking about crypto investing.";
+const paraphrased = sanitize(paraphrasedOutput, systemPrompt);
+console.log(paraphrased.leaked); // true (word overlap match)
+```
+
+## Performance
+
+Typical latency: **&lt;3ms** for outputs up to 8KB.
+
+Run benchmarks:
+
+```bash
+bun run benchmark
+```
+
+## Limitations
+
+<Warning>
+  `sanitize()` uses heuristic n-gram matching. It is effective for detecting direct leaks and close paraphrases, but has limitations:
+  
+  - **Heavy paraphrasing**: Completely reworded leaks may evade detection
+  - **Semantic leaks**: Leaking the "spirit" of instructions without specific words
+  - **Context-dependent leaks**: Leaks that only make sense with conversation history
+  - **False positives**: Generic phrases that appear in both prompt and legitimate output
+  
+  Recommendations:
+  - Use `harden()` to instruct the model not to leak instructions
+  - Tune `threshold` and `wordOverlapThreshold` for your use case
+  - Combine with periodic scanning using [ZeroLeaks](https://zeroleaks.ai)
+  - For high-risk applications, use `detectOnly: true` and manually review flagged outputs
+</Warning>
+
+## When to use sanitize()
+
+<Note>
+  Use `sanitize()` when:
+  - Your system prompt contains sensitive policies or business logic
+  - Users might attempt prompt extraction attacks
+  - Model output is shown to untrusted parties
+  - Compliance requires preventing disclosure of internal instructions
+  
+  Skip `sanitize()` when:
+  - Your system prompt is public or generic
+  - Performance is critical and prompt secrecy is low-risk
+  - You only need input protection (use `detect()` instead)
+</Note>
